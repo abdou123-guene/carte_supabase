@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tronçons</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --ink:#1d2a2e; --paper:#f7f8f6; --line:#c9d1cc; --accent:#0b7a75; --hi:#e4572e; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font: 15px/1.45 system-ui, sans-serif; color: var(--ink); }
+  #app { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+  aside { background: var(--paper); border-right: 1px solid var(--line); padding: 16px; overflow: auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  #statut { color: #5b6a6e; margin: 0 0 16px; }
+  button { font: inherit; padding: 8px 12px; border: 1px solid var(--accent); background: var(--accent);
+           color: #fff; border-radius: 4px; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--hi); outline-offset: 2px; }
+  #fiche { margin-top: 16px; }
+  #fiche dt { font-weight: 600; margin-top: 8px; }
+  #fiche dd { margin: 0; word-break: break-word; }
+  #map { height: 100%; }
+  @media (max-width: 720px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 40% 60%; }
+    aside { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>Tronçons</h1>
+    <p id="statut">Chargement…</p>
+    <button id="recharger" type="button">Recharger cette zone</button>
+    <div id="fiche"><p>Cliquez sur un tronçon pour voir ses attributs.</p></div>
+  </aside>
+  <div id="map"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map').setView([48.8566, 2.3522], 12);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '© OpenStreetMap'
+}).addTo(map);
+
+const statut = document.getElementById('statut');
+const fiche = document.getElementById('fiche');
+let couche = null, premier = true;
+
+function afficherFiche(props) {
+  const dl = document.createElement('dl');
+  for (const [k, v] of Object.entries(props)) {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v ?? '—';
+    dl.append(dt, dd);
+  }
+  fiche.replaceChildren(dl);
+}
+
+async function charger(ajuster) {
+  statut.textContent = 'Chargement…';
+  const b = map.getBounds();
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
+  const url = ajuster ? '/api/troncons' : `/api/troncons?bbox=${bbox}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error((await r.text()) || r.status);
+    const data = await r.json();
+    if (couche) couche.remove();
+    couche = L.geoJSON(data, {
+      style: { color: '#0b7a75', weight: 3 },
+      pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, color: '#0b7a75' }),
+      onEachFeature: (f, layer) => layer.on('click', () => {
+        afficherFiche(f.properties);
+        if (layer.setStyle) { couche.resetStyle(); layer.setStyle({ color: '#e4572e', weight: 5 }); }
+      })
+    }).addTo(map);
+    const n = data.features.length;
+    statut.textContent = n === 0 ? 'Aucun tronçon dans cette zone.' : `${n} tronçon${n > 1 ? 's' : ''} affiché${n > 1 ? 's' : ''}.`;
+    if (ajuster && n > 0) map.fitBounds(couche.getBounds());
+  } catch (e) {
+    statut.textContent = 'Erreur : ' + e.message;
+  }
+}
+
+document.getElementById('recharger').addEventListener('click', () => charger(false));
+charger(true);
+</script>
+</body>
+</html>
