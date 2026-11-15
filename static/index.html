@@ -1,90 +1,100 @@
 <!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tronçons</title>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tronçons OSM · Anglet</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root { --ink:#1d2a2e; --paper:#f7f8f6; --line:#c9d1cc; --accent:#0b7a75; --hi:#e4572e; }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; font: 15px/1.45 system-ui, sans-serif; color: var(--ink); }
-  #app { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
-  aside { background: var(--paper); border-right: 1px solid var(--line); padding: 16px; overflow: auto; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  #statut { color: #5b6a6e; margin: 0 0 16px; }
-  button { font: inherit; padding: 8px 12px; border: 1px solid var(--accent); background: var(--accent);
-           color: #fff; border-radius: 4px; cursor: pointer; }
-  button:focus-visible { outline: 3px solid var(--hi); outline-offset: 2px; }
-  #fiche { margin-top: 16px; }
-  #fiche dt { font-weight: 600; margin-top: 8px; }
-  #fiche dd { margin: 0; word-break: break-word; }
-  #map { height: 100%; }
-  @media (max-width: 720px) {
-    #app { grid-template-columns: 1fr; grid-template-rows: 40% 60%; }
-    aside { order: 2; border-right: 0; border-top: 1px solid var(--line); }
-  }
-</style>
-</head>
-<body>
+:root{--bg:#f7f8f6;--ink:#1d2a2e;--mut:#5b6a6e;--line:#d5dcd8;--acc:#0b7a75;--card:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#161d20;--ink:#e6ecea;--mut:#9aaaa6;--line:#2c3a3e;--acc:#3fc1b9;--card:#1e282c}}
+*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px/1.45 system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+#app{display:grid;grid-template-columns:330px 1fr;height:100%}
+aside{padding:16px;overflow:auto;border-right:1px solid var(--line)}
+h1{font-size:19px;margin:0}small{color:var(--mut)}
+input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
+button{cursor:pointer;width:auto}button.p{background:var(--acc);color:#fff;border-color:var(--acc)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #e4572e;outline-offset:1px}
+details{border-top:1px solid var(--line);padding:8px 0}summary{cursor:pointer;font-weight:600}
+.o{display:flex;gap:8px;align-items:center;padding:2px 0}.o span:last-child{margin-left:auto;color:var(--mut)}.o input{width:auto}
+.dot{width:12px;height:12px;border-radius:3px;flex:none}
+#stats{display:flex;gap:8px;margin:12px 0}.k{flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px}.k b{display:block;font-size:21px}
+main{position:relative;min-height:0}#map{height:100%}
+#drawer{position:absolute;left:0;right:0;bottom:0;max-height:50%;background:var(--card);border-top:3px solid var(--acc);z-index:1000;display:flex;flex-direction:column;box-shadow:0 -6px 24px #0003}
+#drawer[hidden]{display:none}.dh{display:flex;gap:10px;align-items:center;padding:10px 14px}.dh h2{margin:0;font-size:16px}.dh .sp{flex:1}.dh input{width:200px}
+.tw{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 14px;border-top:1px solid var(--line);vertical-align:top;word-break:break-word}
+th{width:34%;color:var(--mut);font-weight:600}tr:nth-child(even){background:#8881}
+.badge{background:var(--acc);color:#fff;border-radius:99px;padding:2px 10px;font-size:12px}
+.crd{background:var(--card);padding:3px 8px;border-radius:4px;font-size:12px}
+@media(max-width:760px){#app{grid-template-columns:1fr;grid-template-rows:55% 45%}aside{order:2;border:0}}
+</style></head><body>
 <div id="app">
-  <aside>
-    <h1>Tronçons</h1>
-    <p id="statut">Chargement…</p>
-    <button id="recharger" type="button">Recharger cette zone</button>
-    <div id="fiche"><p>Cliquez sur un tronçon pour voir ses attributs.</p></div>
-  </aside>
-  <div id="map"></div>
-</div>
+<aside>
+ <h1>Tronçons OSM</h1><small>Anglet · réseau routier et chemins</small>
+ <p><input id="q" type="search" placeholder="Rechercher un nom de rue…" aria-label="Recherche"></p>
+ <div id="stats"><div class="k"><b id="n">–</b><small>tronçons</small></div><div class="k"><b id="km">–</b><small>km</small></div></div>
+ <label>Colorer par <select id="by"></select></label><div id="legend"></div>
+ <h3 style="margin:14px 0 0">Filtres</h3><div id="filters"></div>
+ <p><button class="p" id="exp">Exporter GeoJSON</button> <button id="rst">Réinitialiser</button></p>
+</aside>
+<main><div id="map"></div>
+ <section id="drawer" hidden>
+  <div class="dh"><h2 id="ttl"></h2><span class="badge" id="bdg"></span><span class="sp"></span>
+   <input id="ts" type="search" placeholder="Filtrer la table…" aria-label="Filtrer la table"><button id="cl" aria-label="Fermer">✕</button></div>
+  <div class="tw"><table><tbody id="tb"></tbody></table></div>
+ </section></main></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map').setView([48.8566, 2.3522], 12);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '© OpenStreetMap'
-}).addTo(map);
-
-const statut = document.getElementById('statut');
-const fiche = document.getElementById('fiche');
-let couche = null, premier = true;
-
-function afficherFiche(props) {
-  const dl = document.createElement('dl');
-  for (const [k, v] of Object.entries(props)) {
-    const dt = document.createElement('dt'); dt.textContent = k;
-    const dd = document.createElement('dd'); dd.textContent = v ?? '—';
-    dl.append(dt, dd);
-  }
-  fiche.replaceChildren(dl);
-}
-
-async function charger(ajuster) {
-  statut.textContent = 'Chargement…';
-  const b = map.getBounds();
-  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
-  const url = ajuster ? '/api/troncons' : `/api/troncons?bbox=${bbox}`;
-  try {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error((await r.text()) || r.status);
-    const data = await r.json();
-    if (couche) couche.remove();
-    couche = L.geoJSON(data, {
-      style: { color: '#0b7a75', weight: 3 },
-      pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, color: '#0b7a75' }),
-      onEachFeature: (f, layer) => layer.on('click', () => {
-        afficherFiche(f.properties);
-        if (layer.setStyle) { couche.resetStyle(); layer.setStyle({ color: '#e4572e', weight: 5 }); }
-      })
-    }).addTo(map);
-    const n = data.features.length;
-    statut.textContent = n === 0 ? 'Aucun tronçon dans cette zone.' : `${n} tronçon${n > 1 ? 's' : ''} affiché${n > 1 ? 's' : ''}.`;
-    if (ajuster && n > 0) map.fitBounds(couche.getBounds());
-  } catch (e) {
-    statut.textContent = 'Erreur : ' + e.message;
-  }
-}
-
-document.getElementById('recharger').addEventListener('click', () => charger(false));
-charger(true);
-</script>
-</body>
-</html>
+const $=s=>document.querySelector(s),el=(t,a={},...k)=>{const e=Object.assign(document.createElement(t),a);e.append(...k);return e};
+const PAL=['#0b7a75','#e4572e','#f2a541','#5c6bc0','#8e44ad','#2e9e5b','#c2185b','#00838f','#6d4c41','#7f8c8d','#d4a017','#1e88e5'];
+const map=L.map('map').setView([43.49,-1.52],13);
+const T=(u,o)=>L.tileLayer(u,{maxZoom:19,...o}),A='© OpenStreetMap';
+const bm={'Clair':T('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',{attribution:A+' © CARTO'}),
+ 'Sombre':T('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',{attribution:A+' © CARTO'}),
+ 'OSM':T('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:A}),
+ 'Satellite':T('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'© Esri'})};
+bm.Clair.addTo(map);L.control.layers(bm).addTo(map);L.control.scale({imperial:false}).addTo(map);
+const cc=L.control({position:'bottomleft'});cc.onAdd=()=>L.DomUtil.create('div','crd');cc.addTo(map);
+map.on('mousemove',e=>cc.getContainer().textContent=e.latlng.lat.toFixed(5)+', '+e.latlng.lng.toFixed(5));
+let meta,by,sel={},col={},layer,data,hl,tm;
+const j=async u=>{const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()};
+const colors=()=>{col={};(meta.fields[by]||[]).forEach((o,i)=>col[o.v]=PAL[i%PAL.length])};
+const sty=f=>{const h=f.properties.highway||'';return{color:col[f.properties[by]??'(vide)']||'#888',
+ weight:/motorway|trunk|primary|secondary/.test(h)?5:/path|track|footway|cycleway|steps/.test(h)?2:3.5,
+ dashArray:/path|track|footway|steps/.test(h)?'5 4':null,opacity:.9}};
+function legend(){$('#legend').replaceChildren(...(meta.fields[by]||[]).map(o=>el('div',{className:'o'},
+ el('span',{className:'dot',style:'background:'+col[o.v]}),el('span',{textContent:o.v}),el('span',{textContent:o.km+' km'}))))}
+async function load(){const p=new URLSearchParams();
+ for(const[f,s]of Object.entries(sel))if(s.size)p.set(f,[...s].join('|'));
+ const q=$('#q').value.trim();if(q)p.set('q',q);
+ try{data=await j('/api/troncons?'+p)}catch(e){$('#n').textContent='Erreur';return}
+ layer&&layer.remove();hl=null;
+ layer=L.geoJSON(data,{style:sty,onEachFeature:(f,l)=>{
+  l.bindTooltip(f.properties.name||f.properties.highway||'Tronçon '+f.properties.fid,{sticky:true});
+  l.on('click',()=>show(f.properties.fid,l))}}).addTo(map);
+ const k=data.features.reduce((a,f)=>a+(f.properties.len||0),0)/1000;
+ $('#n').textContent=data.features.length.toLocaleString('fr');$('#km').textContent=k.toLocaleString('fr',{maximumFractionDigits:1});
+ if(q&&data.features.length)map.fitBounds(layer.getBounds().pad(.1))}
+async function show(fid,l){hl&&layer.resetStyle(hl);hl=l;l.setStyle({color:'#e4572e',weight:7});
+ const d=await j('/api/troncon/'+fid),top=['name','highway','surface','maxspeed','lanes','oneway','longueur_m'];
+ const rk=k=>top.indexOf(k)<0?99:top.indexOf(k);
+ const rows=Object.entries(d).sort((a,b)=>rk(a[0])-rk(b[0])||a[0].localeCompare(b[0]));
+ $('#ttl').textContent=d.name||'Tronçon '+fid;$('#bdg').textContent=d.highway||'';
+ $('#tb').replaceChildren(...rows.map(([k,v])=>{const c=el('td');
+  /^https?:/.test(v)?c.append(el('a',{href:v,target:'_blank',rel:'noopener',textContent:v})):c.textContent=k==='longueur_m'?v+' m':v;
+  return el('tr',{},el('th',{textContent:k}),c)}));
+ $('#ts').value='';$('#drawer').hidden=false}
+$('#ts').oninput=e=>{const t=e.target.value.toLowerCase();[...$('#tb').rows].forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(t))};
+$('#cl').onclick=()=>{$('#drawer').hidden=true;hl&&layer.resetStyle(hl)};
+document.onkeydown=e=>{if(e.key==='Escape')$('#cl').click()};
+$('#q').oninput=()=>{clearTimeout(tm);tm=setTimeout(load,350)};
+$('#by').onchange=e=>{by=e.target.value;colors();layer.setStyle(sty);legend()};
+$('#rst').onclick=()=>{sel={};$('#q').value='';document.querySelectorAll('#filters input').forEach(c=>c.checked=false);load()};
+$('#exp').onclick=()=>el('a',{href:URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/geo+json'})),download:'troncons.geojson'}).click();
+(async()=>{meta=await j('/api/meta');const F=Object.keys(meta.fields);
+ by=F.includes('highway')?'highway':F[0];colors();
+ $('#by').replaceChildren(...F.map(f=>el('option',{textContent:f,value:f})));$('#by').value=by;
+ $('#filters').replaceChildren(...F.map(f=>{const d=el('details',{open:f==='highway'},el('summary',{textContent:f}));
+  meta.fields[f].forEach(o=>d.append(el('label',{className:'o'},
+   el('input',{type:'checkbox',onchange:e=>{(sel[f]??=new Set())[e.target.checked?'add':'delete'](o.v);load()}}),
+   el('span',{textContent:o.v}),el('span',{textContent:o.n}))));return d}));
+ const b=meta.bbox;if(b)map.fitBounds([[b[1],b[0]],[b[3],b[2]]]);
+ legend();load()})();
+</script></body></html>
