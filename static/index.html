@@ -29,6 +29,7 @@ th{width:34%;color:var(--mut);font-weight:600}tr:nth-child(even){background:#888
 <div id="app">
 <aside>
  <h1>Tronçons OSM</h1><small>Anglet · réseau routier et chemins</small>
+ <p><button class="p" id="rt">🧭 Itinéraire</button> <span id="ri" style="color:var(--mut)"></span></p>
  <h3 style="margin:14px 0 4px">Couches</h3><div id="lyrs"></div>
  <p><select id="fmt" style="width:auto"><option value="geojson">GeoJSON</option><option value="csv">CSV</option></select> <button id="dsel">⬇ Sélection</button> <button id="dall">⬇ Tout</button></p>
  <p><input id="q" type="search" placeholder="Rechercher un nom de rue…" aria-label="Recherche"></p>
@@ -73,7 +74,7 @@ async function load(){const p=new URLSearchParams();
  const k=data.features.reduce((a,f)=>a+(f.properties.len||0),0)/1000;
  $('#n').textContent=data.features.length.toLocaleString('fr');$('#km').textContent=k.toLocaleString('fr',{maximumFractionDigits:1});
  if(q&&data.features.length)map.fitBounds(layer.getBounds().pad(.1))}
-async function show(fid,l){hl&&layer.resetStyle(hl);hl=l;l.setStyle({color:'#e4572e',weight:7});
+async function show(fid,l){if(rt)return;hl&&layer.resetStyle(hl);hl=l;l.setStyle({color:'#e4572e',weight:7});
  const d=await j('/api/troncon/'+fid),top=['name','highway','surface','maxspeed','lanes','oneway','longueur_m'];
  const rk=k=>top.indexOf(k)<0?99:top.indexOf(k);
  const rows=Object.entries(d).sort((a,b)=>rk(a[0])-rk(b[0])||a[0].localeCompare(b[0]));
@@ -91,7 +92,7 @@ $('#rst').onclick=()=>{sel={};$('#q').value='';document.querySelectorAll('#filte
 $('#exp').onclick=()=>el('a',{href:URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/geo+json'})),download:'troncons.geojson'}).click();
 const GP=['#d62728','#1f77b4','#2ca02c','#ff7f0e','#9467bd','#8c564b','#e377c2','#17becf','#bcbd22','#393b79','#e6550d','#31a354','#756bb1','#636363','#cb181d','#08519c'];
 const dlu=ids=>'/api/download?'+ids.map(i=>'l='+encodeURIComponent(i)).join('&')+'&fmt='+$('#fmt').value;
-function fill(d,title){const rows=Object.entries(d).sort((a,b)=>a[0].localeCompare(b[0]));
+function fill(d,title){if(rt)return;const rows=Object.entries(d).sort((a,b)=>a[0].localeCompare(b[0]));
  $('#ttl').textContent=title;$('#bdg').textContent=String(d.name||d.stop_name||d.route_short_name||d.nom||'');
  $('#tb').replaceChildren(...rows.map(([k,v])=>{const c=el('td');
   /^https?:/.test(v)?c.append(el('a',{href:v,target:'_blank',rel:'noopener',textContent:v})):c.textContent=typeof v==='object'?JSON.stringify(v):v;
@@ -116,6 +117,19 @@ async function tog(l,on){if(l.osm){osmOn=on;layer&&(on?layer.addTo(map):layer.re
   return d}));
  const go=ids=>ids.length?location.href=dlu(ids):alert('Cochez au moins une couche');
  $('#dsel').onclick=()=>go(LAYS.filter(l=>l.cb.checked).map(l=>l.id));$('#dall').onclick=()=>go(LAYS.map(l=>l.id))})();
+let rt=false,rp=[],rm=[],rl=null;
+const ri=t=>$('#ri').textContent=t;
+function rclear(){rm.forEach(m=>m.remove());rm=[];rp=[];rl&&rl.remove();rl=null}
+$('#rt').onclick=()=>{rt=!rt;rclear();$('#rt').textContent=rt?'✕ Quitter':'🧭 Itinéraire';
+ ri(rt?'Cliquez le départ sur la carte':'');map.getContainer().style.cursor=rt?'crosshair':''};
+map.on('click',async e=>{if(!rt)return;if(rp.length===2)rclear();
+ rp.push(e.latlng);rm.push(L.circleMarker(e.latlng,{radius:9,color:'#fff',weight:2,fillColor:rp.length===1?'#2ca02c':'#d62728',fillOpacity:1}).addTo(map));
+ if(rp.length===1){ri("Cliquez l'arrivée");return}
+ ri('Calcul…');const[a,b]=rp;
+ try{const r=await j(`/api/route?x1=${a.lng}&y1=${a.lat}&x2=${b.lng}&y2=${b.lat}`);
+  rl=L.geoJSON(r.geometry,{style:{color:'#1e5eff',weight:7,opacity:.9}}).addTo(map);map.fitBounds(rl.getBounds().pad(.2));
+  ri((r.m>=1000?(r.m/1000).toFixed(2)+' km':r.m+' m')+' · ≈ '+Math.max(1,Math.round(r.m/80))+' min à pied')}
+ catch(x){let d=x.message;try{d=JSON.parse(d).detail}catch(_){}ri('Échec : '+d)}});
 (async()=>{meta=await j('/api/meta');const F=Object.keys(meta.fields);
  by=F.includes('highway')?'highway':F[0];colors();
  $('#by').replaceChildren(...F.map(f=>el('option',{textContent:f,value:f})));$('#by').value=by;
