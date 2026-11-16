@@ -251,16 +251,19 @@ def route(x1: float, y1: float, x2: float, y2: float):
         g = I(k["g"])
 
         def node(x, y):
+            """Noeud du réseau le plus proche du clic (parmi toutes les extrémités de tronçons)."""
             p = sql.SQL("ST_Transform(ST_SetSRID(ST_MakePoint({},{}),4326),{})").format(
                 sql.Literal(x), sql.Literal(y), sql.Literal(k["srid"]))
-            r = c.execute(sql.SQL("SELECT {s}, {t}, ST_Distance(ST_StartPoint(ST_LineMerge({g})),{p}), "
-                                  "ST_Distance(ST_EndPoint(ST_LineMerge({g})),{p}) FROM {v} WHERE {g} IS NOT NULL "
-                                  "ORDER BY {g} <-> {p} LIMIT 1").format(s=I(k["s"]), t=I(k["t"]), g=g, p=p, v=V_)).fetchone()
+            r = c.execute(sql.SQL(
+                "SELECT n, ST_X(w), ST_Y(w) FROM (SELECT n, ST_Transform(pt,4326) AS w, ST_Distance(pt,{p}) AS d FROM ("
+                "SELECT {s} AS n, ST_StartPoint(ST_LineMerge({g})) AS pt FROM {v} WHERE {g} IS NOT NULL UNION ALL "
+                "SELECT {t}, ST_EndPoint(ST_LineMerge({g})) FROM {v} WHERE {g} IS NOT NULL) u WHERE pt IS NOT NULL) z "
+                "ORDER BY d LIMIT 1").format(p=p, s=I(k["s"]), t=I(k["t"]), g=g, v=V_)).fetchone()
             if not r:
-                raise HTTPException(404, "Aucun tronçon à proximité")
-            return r[0] if (r[2] or 0) <= (r[3] or 0) else r[1]
+                raise HTTPException(404, "Réseau vide")
+            return r[0], r[1], r[2]
 
-        a, b = node(x1, y1), node(x2, y2)
+        (a, ax, ay), (b, bx, by) = node(x1, y1), node(x2, y2)
         if a == b:
             raise HTTPException(404, "Départ et arrivée trop proches")
         cost = sql.SQL("{}::float8").format(I(k["c"])) if k["c"] else sql.SQL("ST_Length({})::float8").format(g)
@@ -275,7 +278,7 @@ def route(x1: float, y1: float, x2: float, y2: float):
             fn=I(k["fn"]), g=g, v=V_, i=I(k["id"]), dr=sql.SQL("true" if k["r"] else "false")), (inner, a, b)).fetchone()
     if not row or row[0] is None:
         raise HTTPException(404, "Aucun chemin trouvé entre ces deux points")
-    return {"geometry": row[0], "m": round(row[1] or 0)}
+    return {"geometry": row[0], "m": round(row[1] or 0), "from": [ax, ay], "to": [bx, by]}
 
 
 @app.get("/")
