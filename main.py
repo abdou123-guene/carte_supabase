@@ -1,4 +1,4 @@
-import io, json, os, re, zipfile
+import heapq, io, json, math, os, re, threading, zipfile
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -212,73 +212,145 @@ def download(l: list[str] = Query(...), fmt: str = "geojson"):
 
 
 
-RV = os.getenv("ROUTE_VIEW", "geo_standards.v_troncon_pgrouting_conforme").split(".")
-_rc = {}
+RV = os.getenv("ROUTE_VIEW", f"{S}.{V}").split(".")
 I = sql.Identifier
+GR, LOCK = {}, threading.Lock()
 
 
-def route_cfg(c):
-    if _rc:
-        return _rc
-    s, v = RV
-    cols = dict(c.execute("""SELECT a.attname, t.typname FROM pg_attribute a
-        JOIN pg_class k ON k.oid=a.attrelid JOIN pg_namespace n ON n.oid=k.relnamespace
-        JOIN pg_type t ON t.oid=a.atttypid
-        WHERE n.nspname=%s AND k.relname=%s AND a.attnum>0 AND NOT a.attisdropped""", (s, v)).fetchall())
-    pick = lambda *k: next((x for x in k if x in cols), None)
-    cfg = {"g": next((a for a, t in cols.items() if t == "geometry"), None), "id": pick("id", "fid", "gid", "ogc_fid"),
-           "s": pick("source", "from_node", "node_from"), "t": pick("target", "to_node", "node_to"),
-           "c": pick("cost", "cout", "longueur", "length"), "r": pick("reverse_cost")}
-    miss = [k for k in ("g", "id", "s", "t") if not cfg[k]]
-    if miss:
-        raise HTTPException(400, f"Colonnes introuvables dans {s}.{v} ({', '.join(miss)}). Colonnes présentes : {', '.join(cols)}")
-    fn = c.execute("SELECT n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
-                   "WHERE p.proname='pgr_dijkstra' LIMIT 1").fetchone()
-    if not fn:
-        raise HTTPException(400, "pgRouting n'est pas activé sur la base (Supabase > Database > Extensions > pgrouting)")
-    cfg["fn"] = fn[0]
-    cfg["srid"] = c.execute(sql.SQL("SELECT ST_SRID({g}) FROM {t} WHERE {g} IS NOT NULL LIMIT 1").format(
-        g=I(cfg["g"]), t=sql.SQL("{}.{}").format(I(s), I(v)))).fetchone()[0] or 4326
-    _rc.update(cfg)
-    return _rc
+def load_graph():
+    """Construit une fois le graphe piéton depuis la table (extrémités des tronçons = noeuds). Sans pgRouting."""
+    with LOCK:
+        if GR:
+            return GR
+        s, v = RV
+        T_ = sql.SQL("{}.{}").format(I(s), I(v))
+        with pool.connection() as c:
+            cols = dict(c.execute("""SELECT a.attname, t.typname FROM pg_attribute a
+                JOIN pg_class k ON k.oid=a.attrelid JOIN pg_namespace n ON n.oid=k.relnamespace
+                JOIN pg_type t ON t.oid=a.atttypid
+                WHERE n.nspname=%s AND k.relname=%s AND a.attnum>0 AND NOT a.attisdropped""", (s, v)).fetchall())
+            g = next((a for a, t in cols.items() if t == "geometry"), None)
+            idc = next((x for x in ("fid", "id", "gid") if x in cols), None)
+            if not g or not idc:
+                raise HTTPException(400, f"Table d'itinéraire {s}.{v} : géométrie ou identifiant introuvable")
+            col = lambda x, ty: sql.SQL("{}::" + ty).format(I(x)) if x in cols else sql.SQL("NULL::" + ty)
+            lnc = next((x for x in ("longueur_m", "pmr_longueur_m") if x in cols), None)
+            ln = col(lnc, "float8") if lnc else sql.SQL("ST_Length(ST_Transform({}::geometry,4326)::geography)").format(I(g))
+            rows = c.execute(sql.SQL(
+                "SELECT {i}, ST_X(a), ST_Y(a), ST_X(b), ST_Y(b), len, acc, cls, pm FROM (SELECT {i}, "
+                "ST_Transform(ST_StartPoint(ST_GeometryN({g}::geometry,1)),4326) AS a, "
+                "ST_Transform(ST_EndPoint(ST_GeometryN({g}::geometry,ST_NumGeometries({g}::geometry))),4326) AS b, "
+                "{ln} AS len, {acc} AS acc, {cls} AS cls, {pm} AS pm FROM {t} WHERE {g} IS NOT NULL) q").format(
+                i=I(idc), g=I(g), ln=ln, acc=col("access_fauteuil", "text"), cls=col("pmr_classe_pente", "text"),
+                pm=col("pmr_pente_maximale_mnt_pct", "float8"), t=T_)).fetchall()
+        nid, nodes, adj, lens, pms = {}, [], [], {}, {}
+
+        def node(lon, lat):
+            key = (round(lon, 6), round(lat, 6))
+            if key not in nid:
+                nid[key] = len(nodes)
+                nodes.append(key)
+                adj.append([])
+            return nid[key]
+
+        for f, x1, y1, x2, y2, l, acc, cls, pm in rows:
+            if None in (x1, y1, x2, y2):
+                continue
+            a, b = node(x1, y1), node(x2, y2)
+            if a == b:
+                continue
+            # 2 = interdit en mode PMR, 1 = pénalisé, 0 = normal
+            fl = 2 if (cls == "FORTE" or (acc and "NON" in acc.upper())) else 1 if cls == "MODEREE" else 0
+            adj[a].append((b, l or 0, f, fl))
+            adj[b].append((a, l or 0, f, fl))
+            lens[f], pms[f] = l or 0, pm or 0
+        GR.update(nodes=nodes, adj=adj, len=lens, pm=pms, t=T_, g=g, i=idc, comp={})
+        return GR
+
+
+def nearest(lon, lat, ok=None):
+    G, k, best = load_graph(), math.cos(math.radians(lat)), None
+    for i, (x, y) in enumerate(G["nodes"]):
+        if ok and not ok(i):
+            continue
+        d = ((x - lon) * k) ** 2 + (y - lat) ** 2
+        if best is None or d < best[0]:
+            best = (d, i)
+    if not best:
+        raise HTTPException(404, "Réseau vide")
+    return best[1]
+
+
+def comps(pmr):
+    """Parties connexes du réseau : (numéro par noeud, partie principale, nombre de parties)."""
+    G, key = load_graph(), bool(pmr)
+    if key not in G["comp"]:
+        comp, sizes = [-1] * len(G["adj"]), []
+        for s0 in range(len(comp)):
+            if comp[s0] != -1:
+                continue
+            cid, st, n = len(sizes), [s0], 0
+            comp[s0] = cid
+            while st:
+                u = st.pop()
+                n += 1
+                for v, _, _, fl in G["adj"][u]:
+                    if comp[v] == -1 and not (pmr and fl == 2):
+                        comp[v] = cid
+                        st.append(v)
+            sizes.append(n)
+        G["comp"][key] = (comp, sizes.index(max(sizes)), len(sizes))
+    return G["comp"][key]
+
+
+def dijkstra(a, b, pmr):
+    adj, dist, prev, pq = GR["adj"], {a: 0}, {}, [(0, a)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u == b:
+            break
+        if d > dist.get(u, 1e18):
+            continue
+        for v, ln, f, fl in adj[u]:
+            if pmr and fl == 2:
+                continue
+            w = d + ln * (1.5 if pmr and fl == 1 else 1)
+            if w < dist.get(v, 1e18):
+                dist[v], prev[v] = w, (u, f)
+                heapq.heappush(pq, (w, v))
+    if b not in dist:
+        return None
+    path, n = [], b
+    while n != a:
+        n, f = prev[n]
+        path.append(f)
+    return path[::-1]
 
 
 @app.get("/api/route")
-def route(x1: float, y1: float, x2: float, y2: float):
-    with pool.connection() as c:
-        k = route_cfg(c)
-        V_ = sql.SQL("{}.{}").format(I(RV[0]), I(RV[1]))
-        g = I(k["g"])
-
-        def node(x, y):
-            """Noeud du réseau le plus proche du clic (parmi toutes les extrémités de tronçons)."""
-            p = sql.SQL("ST_Transform(ST_SetSRID(ST_MakePoint({},{}),4326),{})").format(
-                sql.Literal(x), sql.Literal(y), sql.Literal(k["srid"]))
-            r = c.execute(sql.SQL(
-                "SELECT n, ST_X(w), ST_Y(w) FROM (SELECT n, ST_Transform(pt,4326) AS w, ST_Distance(pt,{p}) AS d FROM ("
-                "SELECT {s} AS n, ST_StartPoint(ST_LineMerge({g})) AS pt FROM {v} WHERE {g} IS NOT NULL UNION ALL "
-                "SELECT {t}, ST_EndPoint(ST_LineMerge({g})) FROM {v} WHERE {g} IS NOT NULL) u WHERE pt IS NOT NULL) z "
-                "ORDER BY d LIMIT 1").format(p=p, s=I(k["s"]), t=I(k["t"]), g=g, v=V_)).fetchone()
-            if not r:
-                raise HTTPException(404, "Réseau vide")
-            return r[0], r[1], r[2]
-
-        (a, ax, ay), (b, bx, by) = node(x1, y1), node(x2, y2)
+def route(x1: float, y1: float, x2: float, y2: float, pmr: int = 0):
+    G, note, ncomp = load_graph(), "", 0
+    a, b = nearest(x1, y1), nearest(x2, y2)
+    same = HTTPException(404, "Départ et arrivée rattachés au même nœud : éloignez les deux clics")
+    if a == b:
+        raise same
+    path = dijkstra(a, b, pmr)
+    if path is None:
+        comp, main, ncomp = comps(pmr)
+        ok = lambda i: comp[i] == main
+        a, b = nearest(x1, y1, ok), nearest(x2, y2, ok)
         if a == b:
-            raise HTTPException(404, "Départ et arrivée trop proches")
-        cost = sql.SQL("{}::float8").format(I(k["c"])) if k["c"] else sql.SQL("ST_Length({})::float8").format(g)
-        rev = sql.SQL(", {}::float8 AS reverse_cost").format(I(k["r"])) if k["r"] else sql.SQL("")
-        inner = sql.SQL("SELECT {i}::bigint AS id, {s}::bigint AS source, {t}::bigint AS target, {c} AS cost{r} FROM {v} "
-                        "WHERE {s} IS NOT NULL AND {t} IS NOT NULL").format(
-            i=I(k["id"]), s=I(k["s"]), t=I(k["t"]), c=cost, r=rev, v=V_).as_string(c)
-        row = c.execute(sql.SQL("WITH d AS (SELECT edge FROM {fn}.pgr_dijkstra(%s,%s::bigint,%s::bigint,directed := {dr})) "
-                                "SELECT ST_AsGeoJSON(ST_Collect(ST_Transform(e.{g},4326)),6)::jsonb, "
-                                "sum(ST_Length(ST_Transform(e.{g},4326)::geography)) "
-                                "FROM d JOIN {v} e ON e.{i}=d.edge WHERE d.edge>0").format(
-            fn=I(k["fn"]), g=g, v=V_, i=I(k["id"]), dr=sql.SQL("true" if k["r"] else "false")), (inner, a, b)).fetchone()
-    if not row or row[0] is None:
-        raise HTTPException(404, "Aucun chemin trouvé entre ces deux points")
-    return {"geometry": row[0], "m": round(row[1] or 0), "from": [ax, ay], "to": [bx, by]}
+            raise same
+        path, note = dijkstra(a, b, pmr), "le nœud le plus proche était isolé : rattachement au réseau principal"
+    if not path:
+        raise HTTPException(404, f"Aucun chemin trouvé ({ncomp} parties non reliées dans le réseau)")
+    with pool.connection() as c:
+        gj = c.execute(sql.SQL("SELECT ST_AsGeoJSON(ST_Collect(ST_Transform({g}::geometry,4326)),6)::jsonb FROM {t} WHERE {i}=ANY(%s)").format(
+            g=I(G["g"]), t=G["t"], i=I(G["i"])), (path,)).fetchone()[0]
+    m = sum(G["len"][f] for f in path)
+    return {"geometry": gj, "m": round(m), "min": max(1, round(m / 83.4)),
+            "pente_max": round(max(G["pm"][f] for f in path), 1), "from": list(G["nodes"][a]),
+            "to": list(G["nodes"][b]), "note": note}
 
 
 @app.get("/")
