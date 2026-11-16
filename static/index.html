@@ -31,6 +31,8 @@ th{width:34%;color:var(--mut);font-weight:600}tr:nth-child(even){background:#888
  <h1>Tronçons OSM</h1><small>Anglet · réseau routier et chemins</small>
  <p><button class="p" id="rt">🧭 Itinéraire</button> <span id="ri" style="color:var(--mut)"></span></p>
  <label class="o"><input type="checkbox" id="pmr"><span>♿ Itinéraire PMR : évite pentes fortes et tronçons non accessibles</span></label>
+ <p style="margin:8px 0 0"><input id="ad" list="dl-d" placeholder="Départ : adresse…" autocomplete="off" aria-label="Adresse de départ"><datalist id="dl-d"></datalist></p>
+ <p style="margin:6px 0 0"><input id="aa" list="dl-a" placeholder="Arrivée : adresse…" autocomplete="off" aria-label="Adresse d'arrivée"><datalist id="dl-a"></datalist></p>
  <h3 style="margin:14px 0 4px">Couches</h3><div id="lyrs"></div>
  <p><select id="fmt" style="width:auto"><option value="geojson">GeoJSON</option><option value="csv">CSV</option></select> <button id="dsel">⬇ Sélection</button> <button id="dall">⬇ Tout</button></p>
  <p><input id="q" type="search" placeholder="Rechercher un nom de rue…" aria-label="Recherche"></p>
@@ -121,7 +123,19 @@ async function tog(l,on){if(l.osm){osmOn=on;layer&&(on?layer.addTo(map):layer.re
 let rt=false,rp=[],rm=[],rl=null;
 const ri=t=>$('#ri').textContent=t;
 function rclear(){rm.forEach(m=>m.remove());rm=[];rp=[];rl&&rl.remove();rl=null}
-$('#pmr').onchange=()=>{rclear();rt&&ri('Cliquez le départ sur la carte')};
+const adr={d:null,a:null},sug={};let at;
+const mk=(ll,c)=>rm.push(L.circleMarker(ll,{radius:9,color:'#fff',weight:2,fillColor:c,fillOpacity:1}).addTo(map));
+function runAddr(){rclear();adr.d&&mk(adr.d,'#2ca02c');adr.a&&mk(adr.a,'#d62728');
+ if(adr.d&&adr.a){rp=[adr.d,adr.a];calc()}else map.setView(adr.d||adr.a,17)}
+async function setAddr(k,inp){const q=inp.value.trim();if(!q){adr[k]=null;return}
+ let c=sug[q];if(!c){try{c=(await j('/api/geocode?q='+encodeURIComponent(q)))[0]}catch(e){}}
+ if(!c){ri('Adresse introuvable : '+q);return}
+ adr[k]=L.latLng(c.lat,c.lon);runAddr()}
+[['ad','d','dl-d'],['aa','a','dl-a']].forEach(([i,k,dl])=>{const inp=$('#'+i);
+ inp.oninput=()=>{clearTimeout(at);at=setTimeout(async()=>{const q=inp.value.trim();if(q.length<4||sug[q])return;
+  try{const r=await j('/api/geocode?q='+encodeURIComponent(q));$('#'+dl).replaceChildren(...r.map(x=>{sug[x.label]=x;return el('option',{value:x.label})}))}catch(e){}},350)};
+ inp.onchange=()=>setAddr(k,inp)});
+$('#pmr').onchange=()=>{if(adr.d&&adr.a)runAddr();else{rclear();rt&&ri('Cliquez le départ sur la carte')}};
 const snap=(ll,n)=>{const q=L.latLng(n[1],n[0]);rm.push(L.polyline([ll,q],{color:'#555',weight:2,dashArray:'4 4'}).addTo(map),
  L.circleMarker(q,{radius:5,color:'#1e5eff',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map))};
 const dm=(ll,n)=>Math.round(ll.distanceTo(L.latLng(n[1],n[0])))+' m';
@@ -130,11 +144,12 @@ $('#rt').onclick=()=>{rt=!rt;rclear();$('#rt').textContent=rt?'✕ Quitter':'�
 map.on('click',async e=>{if(!rt)return;if(rp.length===2)rclear();
  rp.push(e.latlng);rm.push(L.circleMarker(e.latlng,{radius:9,color:'#fff',weight:2,fillColor:rp.length===1?'#2ca02c':'#d62728',fillOpacity:1}).addTo(map));
  if(rp.length===1){ri("Cliquez l'arrivée");return}
- ri('Calcul…');const[a,b]=rp;
+ calc()});
+async function calc(){ri('Calcul…');const[a,b]=rp;
  try{const r=await j(`/api/route?x1=${a.lng}&y1=${a.lat}&x2=${b.lng}&y2=${b.lat}&pmr=${$('#pmr').checked?1:0}`);
   rl=L.geoJSON(r.geometry,{style:{color:'#1e5eff',weight:7,opacity:.9}}).addTo(map);snap(a,r.from);snap(b,r.to);map.fitBounds(rl.getBounds().pad(.2));
   ri((r.m>=1000?(r.m/1000).toFixed(2)+' km':r.m+' m')+' · ≈ '+r.min+' min à pied'+(r.pente_max?' · pente max '+r.pente_max+' %':'')+' · points rattachés au réseau à '+dm(a,r.from)+' et '+dm(b,r.to)+(r.note?' · '+r.note:''))}
- catch(x){let d=x.message;try{d=JSON.parse(d).detail}catch(_){}ri('Échec : '+d)}});
+ catch(x){let d=x.message;try{d=JSON.parse(d).detail}catch(_){}ri('Échec : '+d)}}
 (async()=>{meta=await j('/api/meta');const F=Object.keys(meta.fields);
  by=F.includes('highway')?'highway':F[0];colors();
  $('#by').replaceChildren(...F.map(f=>el('option',{textContent:f,value:f})));$('#by').value=by;
