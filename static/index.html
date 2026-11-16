@@ -120,6 +120,9 @@ async function tog(l,on){if(l.osm){osmOn=on;layer&&(on?layer.addTo(map):layer.re
 let rt=false,rp=[],rm=[],rl=null;
 const ri=t=>$('#ri').textContent=t;
 function rclear(){rm.forEach(m=>m.remove());rm=[];rp=[];rl&&rl.remove();rl=null}
+const snap=(ll,n)=>{const q=L.latLng(n[1],n[0]);rm.push(L.polyline([ll,q],{color:'#555',weight:2,dashArray:'4 4'}).addTo(map),
+ L.circleMarker(q,{radius:5,color:'#1e5eff',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map))};
+const dm=(ll,n)=>Math.round(ll.distanceTo(L.latLng(n[1],n[0])))+' m';
 $('#rt').onclick=()=>{rt=!rt;rclear();$('#rt').textContent=rt?'✕ Quitter':'🧭 Itinéraire';
  ri(rt?'Cliquez le départ sur la carte':'');map.getContainer().style.cursor=rt?'crosshair':''};
 map.on('click',async e=>{if(!rt)return;if(rp.length===2)rclear();
@@ -127,8 +130,8 @@ map.on('click',async e=>{if(!rt)return;if(rp.length===2)rclear();
  if(rp.length===1){ri("Cliquez l'arrivée");return}
  ri('Calcul…');const[a,b]=rp;
  try{const r=await j(`/api/route?x1=${a.lng}&y1=${a.lat}&x2=${b.lng}&y2=${b.lat}`);
-  rl=L.geoJSON(r.geometry,{style:{color:'#1e5eff',weight:7,opacity:.9}}).addTo(map);map.fitBounds(rl.getBounds().pad(.2));
-  ri((r.m>=1000?(r.m/1000).toFixed(2)+' km':r.m+' m')+' · ≈ '+Math.max(1,Math.round(r.m/80))+' min à pied')}
+  rl=L.geoJSON(r.geometry,{style:{color:'#1e5eff',weight:7,opacity:.9}}).addTo(map);snap(a,r.from);snap(b,r.to);map.fitBounds(rl.getBounds().pad(.2));
+  ri((r.m>=1000?(r.m/1000).toFixed(2)+' km':r.m+' m')+' · ≈ '+Math.max(1,Math.round(r.m/80))+' min à pied · points rattachés au réseau à '+dm(a,r.from)+' et '+dm(b,r.to))}
  catch(x){let d=x.message;try{d=JSON.parse(d).detail}catch(_){}ri('Échec : '+d)}});
 (async()=>{meta=await j('/api/meta');const F=Object.keys(meta.fields);
  by=F.includes('highway')?'highway':F[0];colors();
