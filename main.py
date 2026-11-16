@@ -1,4 +1,4 @@
-import heapq, io, json, math, os, re, threading, zipfile
+import heapq, io, json, math, os, re, threading, urllib.parse, urllib.request, zipfile
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -351,6 +351,19 @@ def route(x1: float, y1: float, x2: float, y2: float, pmr: int = 0):
     return {"geometry": gj, "m": round(m), "min": max(1, round(m / 83.4)),
             "pente_max": round(max(G["pm"][f] for f in path), 1), "from": list(G["nodes"][a]),
             "to": list(G["nodes"][b]), "note": note}
+
+
+@app.get("/api/geocode")
+def geocode(q: str):
+    """Recherche d'adresse (Géoplateforme IGN / BAN), résultats biaisés vers Anglet."""
+    u = "https://data.geopf.fr/geocodage/search?" + urllib.parse.urlencode({"q": q, "limit": 6, "lat": 43.49, "lon": -1.52})
+    try:
+        with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "carte-troncons"}), timeout=8) as r:
+            d = json.load(r)
+    except Exception:
+        raise HTTPException(502, "Service d'adresses indisponible")
+    return [{"label": f["properties"].get("label"), "lon": f["geometry"]["coordinates"][0], "lat": f["geometry"]["coordinates"][1]}
+            for f in d.get("features", [])]
 
 
 @app.get("/")
