@@ -211,6 +211,73 @@ def download(l: list[str] = Query(...), fmt: str = "geojson"):
     return Response(b.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="couches.zip"'})
 
 
+
+RV = os.getenv("ROUTE_VIEW", "geo_standards.v_troncon_pgrouting_conforme").split(".")
+_rc = {}
+I = sql.Identifier
+
+
+def route_cfg(c):
+    if _rc:
+        return _rc
+    s, v = RV
+    cols = dict(c.execute("""SELECT a.attname, t.typname FROM pg_attribute a
+        JOIN pg_class k ON k.oid=a.attrelid JOIN pg_namespace n ON n.oid=k.relnamespace
+        JOIN pg_type t ON t.oid=a.atttypid
+        WHERE n.nspname=%s AND k.relname=%s AND a.attnum>0 AND NOT a.attisdropped""", (s, v)).fetchall())
+    pick = lambda *k: next((x for x in k if x in cols), None)
+    cfg = {"g": next((a for a, t in cols.items() if t == "geometry"), None), "id": pick("id", "fid", "gid", "ogc_fid"),
+           "s": pick("source", "from_node", "node_from"), "t": pick("target", "to_node", "node_to"),
+           "c": pick("cost", "cout", "longueur", "length"), "r": pick("reverse_cost")}
+    miss = [k for k in ("g", "id", "s", "t") if not cfg[k]]
+    if miss:
+        raise HTTPException(400, f"Colonnes introuvables dans {s}.{v} ({', '.join(miss)}). Colonnes présentes : {', '.join(cols)}")
+    fn = c.execute("SELECT n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                   "WHERE p.proname='pgr_dijkstra' LIMIT 1").fetchone()
+    if not fn:
+        raise HTTPException(400, "pgRouting n'est pas activé sur la base (Supabase > Database > Extensions > pgrouting)")
+    cfg["fn"] = fn[0]
+    cfg["srid"] = c.execute(sql.SQL("SELECT ST_SRID({g}) FROM {t} WHERE {g} IS NOT NULL LIMIT 1").format(
+        g=I(cfg["g"]), t=sql.SQL("{}.{}").format(I(s), I(v)))).fetchone()[0] or 4326
+    _rc.update(cfg)
+    return _rc
+
+
+@app.get("/api/route")
+def route(x1: float, y1: float, x2: float, y2: float):
+    with pool.connection() as c:
+        k = route_cfg(c)
+        V_ = sql.SQL("{}.{}").format(I(RV[0]), I(RV[1]))
+        g = I(k["g"])
+
+        def node(x, y):
+            p = sql.SQL("ST_Transform(ST_SetSRID(ST_MakePoint({},{}),4326),{})").format(
+                sql.Literal(x), sql.Literal(y), sql.Literal(k["srid"]))
+            r = c.execute(sql.SQL("SELECT {s}, {t}, ST_Distance(ST_StartPoint(ST_LineMerge({g})),{p}), "
+                                  "ST_Distance(ST_EndPoint(ST_LineMerge({g})),{p}) FROM {v} WHERE {g} IS NOT NULL "
+                                  "ORDER BY {g} <-> {p} LIMIT 1").format(s=I(k["s"]), t=I(k["t"]), g=g, p=p, v=V_)).fetchone()
+            if not r:
+                raise HTTPException(404, "Aucun tronçon à proximité")
+            return r[0] if (r[2] or 0) <= (r[3] or 0) else r[1]
+
+        a, b = node(x1, y1), node(x2, y2)
+        if a == b:
+            raise HTTPException(404, "Départ et arrivée trop proches")
+        cost = sql.SQL("{}::float8").format(I(k["c"])) if k["c"] else sql.SQL("ST_Length({})::float8").format(g)
+        rev = sql.SQL(", {}::float8 AS reverse_cost").format(I(k["r"])) if k["r"] else sql.SQL("")
+        inner = sql.SQL("SELECT {i}::bigint AS id, {s}::bigint AS source, {t}::bigint AS target, {c} AS cost{r} FROM {v} "
+                        "WHERE {s} IS NOT NULL AND {t} IS NOT NULL").format(
+            i=I(k["id"]), s=I(k["s"]), t=I(k["t"]), c=cost, r=rev, v=V_).as_string(c)
+        row = c.execute(sql.SQL("WITH d AS (SELECT edge FROM {fn}.pgr_dijkstra(%s,%s::bigint,%s::bigint,directed := {dr})) "
+                                "SELECT ST_AsGeoJSON(ST_Collect(ST_Transform(e.{g},4326)),6)::jsonb, "
+                                "sum(ST_Length(ST_Transform(e.{g},4326)::geography)) "
+                                "FROM d JOIN {v} e ON e.{i}=d.edge WHERE d.edge>0").format(
+            fn=I(k["fn"]), g=g, v=V_, i=I(k["id"]), dr=sql.SQL("true" if k["r"] else "false")), (inner, a, b)).fetchone()
+    if not row or row[0] is None:
+        raise HTTPException(404, "Aucun chemin trouvé entre ces deux points")
+    return {"geometry": row[0], "m": round(row[1] or 0)}
+
+
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
